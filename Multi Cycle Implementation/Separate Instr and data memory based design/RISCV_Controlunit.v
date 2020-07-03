@@ -1,0 +1,398 @@
+module RISCV_Controlunit(
+    input        clk,
+    input        rst,
+    input        Zero,
+    input  [6:0] opcode,//instr[6:0]
+    input  [2:0] func3,//instr[14:12]
+    input  [6:0] func7,//instr[31:25]
+    
+    output reg       RFWr, //Regfile write
+    output reg       DMWr, //data memory write
+    output reg       PCWr, //PC write enable
+    output reg       IRWr, //Instruction reg write enable 
+    output reg [4:0] ALUop, //ALU control signal
+    output reg [2:0] DMEXTop, //control signal for sorting data mem outputs for LB,LH,LW,LBU,LHU
+    output reg [1:0] WDsel,  //Writeback mux select line while writing to register Rd(selects b/w PC+4,DM,ALUOUT)
+    output reg [3:0] WRbe,//control signal for sorting data mem outputs for SB,SH,SW,SBU,SHU 
+    output reg       Asel,//select line for A input of ALU(to select b/w Rs1 and PC)
+    output reg       Bsel,//select line for B input of ALU(to select b/w Rs2 and Immediate)
+    output reg [1:0] NPCop
+    );
+    
+    localparam  Fetch      =  4'b0000,
+                DCD        =  4'b0001,
+                EXE        =  4'b0010,
+                Branch     =  4'b0011,
+                Load_store =  4'b0100,
+                JMP        =  4'b0101,
+                Load       =  4'b0110,
+                Store      =  4'b0111,
+                Exe_WB     =  4'b1000,
+                Load_WB    =  4'b1001,
+                Branch_pc  =  4'b1010;
+		
+
+parameter INSTR_Rtype     =   7'b0110011,   //add/sub sll slt sltu xor srl sra or 
+          INSTR_Itype_imm   = 7'b0010011,   //addi slti sltiu xori ori andi slli srli/srai
+          INSTR_Itype_load  = 7'b0000011,   //lb lh lw lbu lhu
+          INSTR_Stype_store = 7'b0100011,   //sb sh sw
+          INSTR_Btype_branch= 7'b1100011,   //beq bne blt bge bltu bgeu
+          INSTR_Jtype_jal   = 7'b1101111,   //JAL
+          INSTR_Itype_jalr  = 7'b1100111,   //JALR
+          INSTR_Utype_lui   = 7'b0110111,   //LUI
+          INSTR_Utype_auipc = 7'b0010111;   //AUIPC
+
+parameter FUNCT_ADDSUB     =  3'b000,
+ FUNCT_SLL     =     3'b001,
+ FUNCT_SLT     =     3'b010,
+ FUNCT_SLTU    =     3'b011,
+ FUNCT_XOR     =     3'b100,
+ FUNCT_SRLSRA  =     3'b101,
+ FUNCT_OR      =     3'b110,
+ FUNCT_AND     =     3'b111,
+ FUNCT_BEQ     =     3'b000,
+ FUNCT_BNE     =     3'b001,
+ FUNCT_BLT     =     3'b100,
+ FUNCT_BGE     =     3'b101,
+ FUNCT_BLTU    =     3'b110,
+ FUNCT_BGEU    =     3'b111,
+//load
+ FUNCT_LB      =      3'b000,
+ FUNCT_LH      =      3'b001,
+ FUNCT_LW      =      3'b010,
+ FUNCT_LBU     =      3'b100,
+ FUNCT_LHU     =      3'b101,
+//store
+ FUNCT_SB      =      3'b000,
+ FUNCT_SH      =      3'b001,
+ FUNCT_SW      =      3'b010;
+
+parameter DMEXT_LB  =  3'b001,    
+DMEXT_LH  =  3'b010,
+DMEXT_LW  =  3'b011,
+DMEXT_LBU =  3'b100,   
+DMEXT_LHU =  3'b101;
+
+
+//WDsel rd
+parameter WDSEL_ALU =  2'b01,
+WDSEL_DM  =  2'b10,
+WDSEL_JMP =  2'b11;
+
+//New PC sources
+parameter NPC_PLUS4 = 2'b00,
+NPC_BRANCH = 2'b01,
+NPC_JUMP   = 2'b10,
+NPC_AUIPC  = 2'b11;
+
+
+parameter ALU_ADD   = 5'b00001;
+parameter ALU_SUB   = 5'b00010;
+parameter ALU_AND   = 5'b00011;
+parameter ALU_OR    = 5'b00100;
+parameter ALU_XOR   = 5'b00101;
+parameter ALU_SLL   = 5'b00110;
+parameter ALU_SRL   = 5'b00111;
+parameter ALU_SRA   = 5'b01000;
+parameter ALU_SLT   = 5'b01001;
+parameter ALU_LUI   = 5'b01010;
+parameter ALU_SLTU  = 5'b01011;
+parameter ALU_BGE   = 5'b01100;
+parameter ALU_BGEU  = 5'b01101;
+parameter ALU_ADDPC  = 5'b01110;
+parameter ALU_JBADDRESS = 5'b01111;
+parameter ALU_BNE    = 5'b10000;
+parameter ALU_BLT    = 5'b10001;
+parameter ALU_BLTU    = 5'b10010;
+
+    
+    wire RType;   // Type of R-Type Instruction  add/sub sll slt sltu xor srl sra or and  
+    wire IType;   // Tyoe of Imm    Instruction  addi slti sltiu xori ori andi slli srli/srai
+    wire BrType;  // Type of Branch Instruction   BEQ/BNE/BLT/BLTU/BGE/BGEU
+    wire JType;   // Type of Jump   Instruction   
+    wire LdType;  // Type of Load   Instruction   Load(5)   lb lh lw lbu lhu
+    wire StType;  // Type of Store  Instruction   store (3) sb sh sw
+    wire MemType; // Type pf Memory Instruction(Load/Store)
+    wire LUI_AUIPC; //lui  auipc
+                    
+    assign RType   = (opcode == INSTR_Rtype );
+    assign IType   = (opcode == INSTR_Itype_imm );
+    assign BrType  = (opcode == INSTR_Btype_branch );
+    assign JType   = (opcode == INSTR_Jtype_jal  );
+    assign LdType  = (opcode == INSTR_Itype_load );
+    assign StType  = (opcode == INSTR_Stype_store );
+    assign MemType = LdType || StType;
+    assign LUI_AUIPC=(opcode == INSTR_Utype_lui || opcode == INSTR_Utype_auipc || opcode == INSTR_Itype_jalr);
+    
+    reg [3:0] state;
+    reg [3:0] nextstate;
+    
+    always @(posedge clk or posedge rst) 
+    begin
+        if(rst)
+            state <= Fetch;
+        else
+            state <= nextstate;
+    end
+    
+    always @(*) 
+    begin
+        case(state)
+            Fetch  : nextstate = DCD;
+            DCD    : begin
+                if(RType || IType || LUI_AUIPC) nextstate = EXE;
+                else if(BrType)    nextstate = Branch;
+                else if(MemType)   nextstate = Load_store;
+                else if(JType)     nextstate = JMP;
+                else               nextstate = Fetch; 
+               end
+            EXE        : nextstate = Exe_WB;  
+            Branch     : nextstate = Branch_pc;
+            Load_store : begin
+                if(LdType)         nextstate = Load;
+                else if(StType)    nextstate = Store;
+               end
+            JMP        : nextstate = Fetch;
+            Load       : nextstate = Load_WB;
+            Store      : nextstate = Fetch;
+            Exe_WB     : nextstate = Fetch;
+            Load_WB    : nextstate = Fetch;
+            Branch_pc  : nextstate = Fetch;
+            default    : ;
+        endcase
+    end
+    
+    
+    always @(*) 
+    begin
+        case (state)
+            Fetch : begin     //Instruction fetch and PC increament
+                RFWr  = 1'b0; //RegfileWr
+                DMWr  = 1'b0; 
+                PCWr  = 1'b1; //PC=PC+4
+                IRWr  = 1'b1; //Inst read
+                ALUop = 5'b0; 
+                WDsel = 2'b0; 
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+                NPCop = NPC_PLUS4;
+                end
+            DCD  : begin
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0; 
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+		NPCop = 2'b0;
+                end
+            EXE  : begin
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                WDsel = 2'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+		NPCop = 2'b0;
+                if(LUI_AUIPC)
+                    begin
+                    Bsel    = 1'b1;
+                    if(opcode == INSTR_Utype_lui)  begin ALUop = ALU_LUI; Asel = 1'b0;end
+                    else if(opcode == INSTR_Utype_auipc)begin ALUop = ALU_ADD; Asel = 1'b1;end
+                    else begin ALUop = ALU_ADD; Asel = 1'b0; end
+                end
+                if(RType) begin  
+                    Asel    = 1'b0;
+                    Bsel    = 1'b0;
+                    case(func3)
+                        FUNCT_ADDSUB : begin
+                            if(func7 == 7'b0000000) ALUop = ALU_ADD;
+                            else                    ALUop = ALU_SUB;
+                            end
+                        FUNCT_SLL  : ALUop = ALU_SLL;
+                        FUNCT_SLT  : ALUop = ALU_SLT;
+                        FUNCT_SLTU : ALUop = ALU_SLTU;
+                        FUNCT_XOR  : ALUop = ALU_XOR;
+                        FUNCT_SRLSRA : begin
+                            if(func7 == 7'b0000000) ALUop = ALU_SRL;
+                            else                    ALUop = ALU_SRA;
+                            end   
+                        FUNCT_OR   : ALUop = ALU_OR;
+                        FUNCT_AND  : ALUop = ALU_AND;
+                    endcase
+                end
+                
+                if(IType) begin  //addi slti sltiu xori ori andi slli srli/srai
+                    Asel  = 1'b0;
+                    Bsel  = 1'b1;  //                    
+                    case(func3)
+                        FUNCT_ADDSUB : ALUop = ALU_ADD;
+                        FUNCT_SLT : ALUop = ALU_SLT;
+                        FUNCT_SLT: ALUop = ALU_SLTU;
+                        FUNCT_XOR : ALUop = ALU_XOR;
+                        FUNCT_OR  : ALUop = ALU_OR;
+                        FUNCT_AND : ALUop = ALU_AND;
+                        FUNCT_SLL : ALUop = ALU_SLL;  
+                        FUNCT_SRLSRA : begin
+                            if(func7 == 0000000) ALUop = ALU_SRL;
+                            else                 ALUop = ALU_SRA;
+                         end   
+                        
+                    endcase
+                end
+                end
+              
+            Branch : begin
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0;  
+                IRWr  = 1'b0; 
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;  
+                PCWr  = 1'b0;
+                NPCop = 2'b0;
+                case(func3)
+                    FUNCT_BEQ : ALUop = ALU_SUB;
+                    FUNCT_BNE : ALUop = ALU_BNE;
+                    FUNCT_BLT : ALUop = ALU_BLT;
+                    FUNCT_BGE : ALUop = ALU_BGE;
+                    FUNCT_BLTU: ALUop = ALU_BLTU;
+                    FUNCT_BGEU: ALUop = ALU_BGEU;
+                endcase
+                end
+                
+            Branch_pc : begin  //writing branch pc value in PC
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0;  
+                IRWr  = 1'b0; 
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                ALUop = 5'b0;
+                DMEXTop=3'b0;
+                if(Zero) begin PCWr  = 1'b1; NPCop = NPC_BRANCH; end
+                else     begin PCWr  = 1'b0; NPCop = 2'b0; end
+                end
+            
+            Load_store : begin    //calculating load/store address
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = ALU_ADD;
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b1;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+		NPCop = 2'b0;
+                end    
+            
+            Load  : begin      
+                RFWr  = 1'b0; 
+                DMWr  = 1'b0; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0;
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+		NPCop = 2'b0;
+                end
+                
+            Store  : begin     //store in memory
+                RFWr  = 1'b0; 
+                DMWr  = 1'b1; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0;
+                WDsel = 2'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                //WRbe  = 4'b0;
+                DMEXTop=3'b0;
+		NPCop = 2'b0;
+                case(func3)
+                    FUNCT_SB : WRbe = 4'b0001;  //store low 8bit
+                    FUNCT_SH : WRbe = 4'b0011;  //store low 16bit
+                    FUNCT_SW : WRbe = 4'b1111;  //store low 32bit
+                endcase
+                end
+                
+            JMP   : begin        //jal
+                RFWr  = 1'b1; 
+                DMWr  = 1'b0; 
+                PCWr  = 1'b1; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0;
+                WDsel = WDSEL_JMP;   //pc+4 to rd
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+		NPCop = NPC_JUMP;
+                end
+                
+            Exe_WB : begin
+                RFWr  = 1'b1; //rd
+                DMWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+                DMEXTop=3'b0;
+                if(opcode == INSTR_Itype_jalr)begin
+                    WDsel = WDSEL_JMP;   //pc+4 to rd
+                    PCWr  = 1'b1;
+		    NPCop = NPC_AUIPC; 
+                end
+                else if(opcode == INSTR_Utype_auipc)begin
+                    WDsel = WDSEL_ALU;
+                    PCWr  = 1'b0;
+		    NPCop = NPC_AUIPC; 
+                end
+                else begin
+                    WDsel = WDSEL_ALU;
+                    PCWr  = 1'b0; 
+		    NPCop = 2'b0;
+                end
+                end
+             
+            Load_WB : begin   //load into register from memory
+                RFWr  = 1'b1; //rd
+                DMWr  = 1'b0; 
+                PCWr  = 1'b0; 
+                IRWr  = 1'b0; 
+                ALUop = 5'b0;
+                WDsel = WDSEL_DM;
+                Asel  = 1'b0;
+                Bsel  = 1'b0;
+                WRbe  = 4'b0;
+		NPCop = 2'b0;
+                case(func3)
+                    FUNCT_LB : DMEXTop = DMEXT_LB;
+                    FUNCT_LH : DMEXTop = DMEXT_LH;
+                    FUNCT_LW : DMEXTop = DMEXT_LW;
+                    FUNCT_LBU: DMEXTop = DMEXT_LBU;
+                    FUNCT_LHU: DMEXTop = DMEXT_LHU;
+                endcase
+                end
+              
+        endcase
+    end
+       
+    
+endmodule
+
