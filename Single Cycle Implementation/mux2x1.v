@@ -1,0 +1,11 @@
+`timescale 1ns / 1ns
+
+module mux2x1 (a,b,s,out);
+
+input [31:0] a, b;
+input s;
+output [31:0] out;
+
+assign out = (s == 1'b1) ? b : a;
+
+endmodule
