@@ -1,0 +1,25 @@
+module RISCV_ALU_tb;
+
+// Inputs
+reg [31:0] A;
+reg [31:0] B;
+reg [4:0] aluoperation;
+
+// Outputs
+wire [31:0] result;
+wire zero;
+
+// Instantiate the Unit Under Test (UUT)
+RISCV_ALU r10(.i_OpCode(aluoperation),.w_SrcA(A),.w_SrcB(B),.o_Result(result),.o_Zero(zero));
+
+initial 
+begin
+// Apply inputs
+A = 5;
+B = 8;
+aluoperation = 5'h0E; 
+#500 $finish;
+
+end
+endmodule
+

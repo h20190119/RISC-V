@@ -1,0 +1,20 @@
+module RISCV_EXTDM(input [31:0] dmout,input [2:0] DMalign,output reg [31:0] DMout);
+
+parameter DMalign_LB  =  3'b001,    
+DMalign_LH  =  3'b010,
+DMalign_LW  =  3'b011,
+DMalign_LBU =  3'b100,   
+DMalign_LHU =  3'b101;
+ 
+    always @(*) 
+    begin
+        case(DMalign)
+            DMalign_LB  : DMout = {{24{dmout[7]} },dmout[7:0]};
+            DMalign_LH  : DMout = {{16{dmout[15]}},dmout[15:0]};
+            DMalign_LW  : DMout = dmout;
+            DMalign_LBU : DMout = {24'b0,dmout[7:0]};
+            DMalign_LHU : DMout = {16'b0,dmout[15:0]};         
+        endcase
+    end
+    
+endmodule
