@@ -1,0 +1,59 @@
+module Pipelineinstfetch(input clk, input reset, input stall, input [31:0] branched_pc, input branch_true,
+output [31:0] instruction_code, output reg jal, output reg [31:0] old_pc, output reg [4:0] ra);
+
+reg [31:0] PC;
+always@(posedge clk, negedge reset)
+begin
+	if (reset==0)
+		PC<=0;
+	else 
+	begin
+		if(stall==1'b0)
+		begin
+			if(branch_true==1'b1)
+			begin
+				PC=branched_pc;
+				if(instruction_code[2]!=1'b1)
+				old_pc=branched_pc;
+				else if(instruction_code[2]==1'b1) begin
+					jal<=1'b1;
+					ra<=instruction_code[11:7];
+					if (instruction_code[3]==1'b1)
+					begin
+						PC<=PC+{{12{instruction_code[31]}},instruction_code[19:12],instruction_code[20],instruction_code[30:21],1'b0};
+						old_pc<=PC;
+					end
+					else
+					begin
+						PC<=PC+4;
+						old_pc<=PC;
+					end
+				end
+			end
+			else if(instruction_code[2]==1'b1) begin
+				jal<=1'b1;
+				ra<=instruction_code[11:7];
+				if (instruction_code[3]==1'b1)
+				begin
+					PC<=PC+{{12{instruction_code[31]}},instruction_code[19:12],instruction_code[20],instruction_code[30:21],1'b0};
+					old_pc<=PC;
+				end
+				else
+				begin
+					PC<=PC+4;
+					old_pc<=PC;
+				end
+			end
+			else begin
+			jal<=1'b0;
+			PC<=PC+4;
+			old_pc<=PC;
+			end
+		end
+	
+	end
+end
+
+PipelineImem m1( PC, reset, instruction_code);
+endmodule
+
