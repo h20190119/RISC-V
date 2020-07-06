@@ -23,7 +23,7 @@ There are 3 different types of architectures that have been explored as part of 
 
 Single Cycle Implementation
 
-![](Block Diagrams/Single Cycle Design.png)
+![](Block Diagrams/Single Cycle Design.PNG)
 
 
 
