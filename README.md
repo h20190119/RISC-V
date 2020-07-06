@@ -16,15 +16,15 @@ In this single cycle design methodology 38 instructions have been implemented. T
 
 In a multi cycle design any instruction execution is broken down in multiple steps.
 
-### IF stage: 
+#### IF stage: 
 Instruction fetch and PC increment
-### ID stage: 
+#### ID stage: 
 Instruction decode, register fetch and immediate value computation
-### EX stage: 
+#### EX stage: 
 Execution, memory address computation, or branch completion 
-### MEM stage:
+#### MEM stage:
 Memory access, store instruction, R type and I type instruction completion 
-### WB stage:
+#### WB stage:
 Memory read and register writeback completion
 
 Each instruction takes from 3 to 5 cycles to complete. 
